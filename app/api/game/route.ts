@@ -107,7 +107,8 @@ export async function POST(req: Request) {
       else if (b.command === 'extend' && stage > 0 && stage < 7 && phase !== 'paused') { phase = 'open'; deadline = Math.max(now, deadline || now) + 30000; }
       else if (b.command === 'finish') { stage = 7; phase = 'revealed'; deadline = null; }
       else throw new Error('当前不能执行这个操作');
-      const result = await db().prepare('UPDATE rooms SET stage=?,phase=?,deadline=?,remaining=?,game_end=?,revision=revision+1 WHERE code=? AND revision=?').bind(stage, phase, deadline, remaining, end, r.code, r.revision).run();
+      const expiry = stage === 7 && r.stage !== 7 ? now + 7 * 86400000 : r.expires_at;
+      const result = await db().prepare('UPDATE rooms SET stage=?,phase=?,deadline=?,remaining=?,game_end=?,expires_at=?,revision=revision+1 WHERE code=? AND revision=?').bind(stage, phase, deadline, remaining, end, expiry, r.code, r.revision).run();
       if (!result.meta.changes) return json({ error: '操作冲突，请重试' }, 409);
       return json(await state(req, r.code));
     }

@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-const base = process.env.TEST_BASE || 'http://localhost:5173';
+const base = process.argv[2] || process.env.TEST_BASE || 'http://localhost:5173';
 if (!['localhost','127.0.0.1'].includes(new URL(base).hostname)) throw new Error('Integration tests are restricted to the local preview; never load-test the live class room.');
-const key = readFileSync('.dev.vars','utf8').match(/^HOST_SETUP_KEY=(.+)$/m)?.[1];
+const key = process.argv[3] ? readFileSync(process.argv[3],'utf8').trim() : readFileSync('.dev.vars','utf8').match(/^HOST_SETUP_KEY=(.+)$/m)?.[1];
 let checks=0; const ok=(condition,label)=>{assert.ok(condition,label);checks++;};
 async function post(body, token='', hostKey='') { const res=await fetch(base+'/api/game',{method:'POST',headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{}),...(hostKey?{'X-Host-Key':hostKey}:{})},body:JSON.stringify(body)});return {status:res.status,data:await res.json()}; }
 async function get(code,token){const res=await fetch(base+'/api/game?room='+code,{headers:{Authorization:'Bearer '+token}});return {status:res.status,data:await res.json()};}
@@ -24,8 +24,8 @@ ok((await get(code,tokens[0])).data.mine['1'].text==='修改后的测试答案',
 const hidden=state.cards[0];await post({action:'hide',code,id:hidden.id,hidden:true},host);ok(!(await get(code,screen)).data.cards.some(a=>a.id===hidden.id),'hidden card absent from projection');
 await control('pause');ok((await post({action:'answer',code,stage:1,payload:{category:0,text:'暂停中'}},tokens[0])).status===400,'paused room rejects writes');
 await control('resume');
-const folder='.wrangler/state/v3/d1/miniflare-D1DatabaseObject';const file=readdirSync(folder).find(f=>f.endsWith('.sqlite'));const sqlite=new DatabaseSync(folder+'/'+file,{timeout:5000});
-sqlite.prepare('UPDATE rooms SET deadline=1,game_end=1 WHERE code=?').run(code);
+const folder='.wrangler/state/v3/d1/miniflare-D1DatabaseObject';const sqlitePath=process.argv[4] || folder+'/'+readdirSync(folder).find(f=>f.endsWith('.sqlite'));const sqlite=new DatabaseSync(sqlitePath,{timeout:5000});
+sqlite.prepare('UPDATE rooms SET deadline=1,game_end=1,expires_at=? WHERE code=?').run(Date.now()+86400000,code);
 state=(await get(code,host)).data;ok(state.stage===1&&state.phase==='open','elapsed timers never auto-advance or auto-close');
 ok((await post({action:'answer',code,stage:1,payload:{category:0,text:'参考时间已过，仍可提交'}},tokens[1])).status===200,'submission remains valid after reference timer');
 await control('reveal');ok((await post({action:'answer',code,stage:1,payload:{category:0,text:'已关闭'}},tokens[0])).status===400,'manual reveal closes submission');
@@ -37,7 +37,7 @@ state=(await get(code,host)).data;await control('reveal');ok((await get(code,scr
 await control('next');await Promise.all(tokens.map(token=>post({action:'answer',code,stage:4,payload:{choice:1}},token)));state=(await get(code,host)).data;await control('reveal');ok(state.totals['4'][1]===40,'branch narrative votes tally');
 await control('next');await post({action:'answer',code,stage:5,payload:{category:0,text:'互相答疑'}},tokens[0]);
 await control('next');await Promise.all(tokens.map((token,i)=>post({action:'answer',code,stage:6,payload:{choice:i%2}},token)));state=(await get(code,host)).data;await control('reveal');ok(state.totals['6'][0]===20&&state.totals['6'][1]===20,'tied priorities remain tied');
-await control('next');ok(state.stage===7,'host explicitly generates report');const exported=await post({action:'export',code},host);ok(exported.data.answers.length===162,'export includes every successful answer including hidden cards');
+await control('next');ok(state.stage===7,'host explicitly generates report');ok(state.expiresAt>Date.now()+6.9*86400000,'retention restarts for seven days after the activity ends');const exported=await post({action:'export',code},host);ok(exported.data.answers.length===162,'export includes every successful answer including hidden cards');
 writeFileSync('.sites-runtime/test-room.json',JSON.stringify({code,host,screen}));
 const expiredCode=String(100000+Math.floor(Math.random()*900000));sqlite.prepare('INSERT INTO rooms(code,host_hash,screen_hash,created_at,expires_at) VALUES(?,?,?,?,?)').run(expiredCode,'x','y',1,1);
 ok((await get(expiredCode,host)).status===400,'expired rooms cannot be accessed');

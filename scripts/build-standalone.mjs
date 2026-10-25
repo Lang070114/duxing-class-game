@@ -1,0 +1,12 @@
+import { build } from 'esbuild';
+import {mkdirSync,writeFileSync,copyFileSync,readFileSync,readdirSync} from 'node:fs';
+mkdirSync('standalone-dist/assets',{recursive:true});mkdirSync('standalone-dist/drizzle',{recursive:true});
+await build({entryPoints:['standalone/client.tsx'],bundle:true,minify:true,format:'esm',jsx:'automatic',target:'es2020',outfile:'standalone-dist/assets/main.js'});
+await build({entryPoints:['app/api/game/route.ts'],bundle:true,minify:true,format:'esm',platform:'node',target:'node24',outfile:'standalone-dist/api.mjs',plugins:[{name:'local-database',setup(b){b.onResolve({filter:/^cloudflare:workers$/},()=>({path:'env',namespace:'local-database'}));b.onLoad({filter:/.*/,namespace:'local-database'},()=>({contents:'export const env = globalThis.__DUXING_ENV;',loader:'js'}));}}]});
+writeFileSync('standalone-dist/index.html','<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>笃行班 · 我们班，正在联机！</title><link rel="stylesheet" href="/assets/main.css"></head><body><div id="root"></div><script type="module" src="/assets/main.js"></script></body></html>');
+copyFileSync('standalone/server.mjs','standalone-dist/server.mjs');copyFileSync('public/offline.html','standalone-dist/offline.html');
+const journal=JSON.parse(readFileSync('drizzle/meta/_journal.json','utf8'));writeFileSync('standalone-dist/drizzle/journal.json',JSON.stringify(journal.entries.map(e=>e.tag+'.sql')));
+for(const entry of journal.entries)copyFileSync('drizzle/'+entry.tag+'.sql','standalone-dist/drizzle/'+entry.tag+'.sql');
+writeFileSync('standalone-dist/启动笃行班游戏.cmd','@echo off\r\nchcp 65001 >nul\r\ncd /d "%~dp0"\r\nnode --disable-warning=ExperimentalWarning server.mjs\r\npause\r\n','utf8');
+writeFileSync('standalone-dist/使用说明.txt','笃行班多人互动游戏\r\n\r\n需要Node.js 24或更新版本。解压后双击“启动笃行班游戏.cmd”。\r\n电脑与同学手机连接同一个教室Wi-Fi。使用启动窗口提供的教室网络地址打开主持入口。\r\n主持口令保存在data/主持说明.txt，仅留给班长。创建房间后打开投影页，让同学扫码加入。\r\n如果电脑启用了防火墙，需要由本人决定是否允许本程序在专用教室网络接受连接；程序不会修改防火墙。\r\n倒计时仅作参考，所有推进均由主持人决定。\r\n数据保存在本机data目录；不要删除，也不要上传GitHub。结束后导出CSV/JSON和报告。\r\n运行时清理已过期房间；电脑关机期间不会后台运行清理。\r\n\r\n该版本与云端使用同一套游戏逻辑，适合局域网现场使用，也可部署到具备持久磁盘的Node.js 24服务器。\r\n不适合直接放入会丢弃本地文件的无状态云函数。\r\n','utf8');
+console.log('Standalone edition built in standalone-dist. No external runtime packages required.');
