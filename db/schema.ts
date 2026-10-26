@@ -3,6 +3,7 @@ export const rooms = sqliteTable('rooms', {
   code: text('code').primaryKey(), hostHash: text('host_hash').notNull(), screenHash: text('screen_hash').notNull(),
   stage: integer('stage').notNull().default(0), phase: text('phase').notNull().default('open'),
   revision: integer('revision').notNull().default(0), deadline: integer('deadline'), remaining: integer('remaining'),
+  rulesVersion: integer('rules_version').notNull().default(1), isDemo: integer('is_demo').notNull().default(0), round: integer('round').notNull().default(0),
   gameEnd: integer('game_end'), createdAt: integer('created_at').notNull(), expiresAt: integer('expires_at').notNull(),
 });
 export const players = sqliteTable('players', {

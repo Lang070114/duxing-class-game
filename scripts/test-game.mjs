@@ -1,45 +1,54 @@
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
-const base = process.argv[2] || process.env.TEST_BASE || 'http://localhost:5173';
-if (!['localhost','127.0.0.1'].includes(new URL(base).hostname)) throw new Error('Integration tests are restricted to the local preview; never load-test the live class room.');
-const key = process.argv[3] ? readFileSync(process.argv[3],'utf8').trim() : readFileSync('.dev.vars','utf8').match(/^HOST_SETUP_KEY=(.+)$/m)?.[1];
-let checks=0; const ok=(condition,label)=>{assert.ok(condition,label);checks++;};
-async function post(body, token='', hostKey='') { const res=await fetch(base+'/api/game',{method:'POST',headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{}),...(hostKey?{'X-Host-Key':hostKey}:{})},body:JSON.stringify(body)});return {status:res.status,data:await res.json()}; }
-async function get(code,token){const res=await fetch(base+'/api/game?room='+code,{headers:{Authorization:'Bearer '+token}});return {status:res.status,data:await res.json()};}
-const denied=await post({action:'create'},'','wrong');ok(denied.status===403,'wrong creation key rejected');
-const made=await post({action:'create'},'',key);ok(made.status===200,'host can create room');const {code,host,screen}=made.data;
-let state=(await get(code,host)).data;
-const control=async command=>{const r=await post({action:'control',code,revision:state.revision,command},host);assert.equal(r.status,200,JSON.stringify(r.data));state=r.data;return state;};
-const start=Date.now();const joins=await Promise.all(Array.from({length:40},()=>post({action:'join',code})));ok(joins.every(r=>r.status===200),'40 concurrent joins');
-const tokens=joins.map(r=>r.data.token);state=(await get(code,host)).data;ok(state.players===40,'all players persist');
-ok((await get(code,'bad-token')).status===400,'uncredentialed reads rejected');
-ok((await post({action:'control',code,command:'next',revision:state.revision},tokens[0])).status===403,'player cannot control host');
-ok((await post({action:'export',code},screen)).status===403,'screen cannot export raw answers');
-await control('next');
-const responses=await Promise.all(tokens.map((token,i)=>post({action:'answer',code,stage:1,payload:{category:i%2,text:'本地并发测试 '+i}},token)));
-ok(responses.every(r=>r.status===200),'40 concurrent answer submissions');state=(await get(code,host)).data;ok(state.counts['1']===40,'all 40 answers stored');
-await post({action:'answer',code,stage:1,payload:{category:0,text:'修改后的测试答案'}},tokens[0]);state=(await get(code,host)).data;ok(state.counts['1']===40,'updating an answer does not double count');
-ok((await get(code,tokens[0])).data.mine['1'].text==='修改后的测试答案','saved answer survives a fresh read');
-const hidden=state.cards[0];await post({action:'hide',code,id:hidden.id,hidden:true},host);ok(!(await get(code,screen)).data.cards.some(a=>a.id===hidden.id),'hidden card absent from projection');
-await control('pause');ok((await post({action:'answer',code,stage:1,payload:{category:0,text:'暂停中'}},tokens[0])).status===400,'paused room rejects writes');
-await control('resume');
-const folder='.wrangler/state/v3/d1/miniflare-D1DatabaseObject';const sqlitePath=process.argv[4] || folder+'/'+readdirSync(folder).find(f=>f.endsWith('.sqlite'));const sqlite=new DatabaseSync(sqlitePath,{timeout:5000});
-sqlite.prepare('UPDATE rooms SET deadline=1,game_end=1,expires_at=? WHERE code=?').run(Date.now()+86400000,code);
-state=(await get(code,host)).data;ok(state.stage===1&&state.phase==='open','elapsed timers never auto-advance or auto-close');
-ok((await post({action:'answer',code,stage:1,payload:{category:0,text:'参考时间已过，仍可提交'}},tokens[1])).status===200,'submission remains valid after reference timer');
-await control('reveal');ok((await post({action:'answer',code,stage:1,payload:{category:0,text:'已关闭'}},tokens[0])).status===400,'manual reveal closes submission');
-await control('next');await post({action:'answer',code,stage:2,payload:{text:'自己安排时间',need:'交流选择'}},tokens[0]);
-await control('next');ok((await post({action:'answer',code,stage:3,payload:{coins:[4,1,0]}},tokens[0])).status===400,'invalid time allocation rejected');
-await Promise.all(tokens.map(token=>post({action:'answer',code,stage:3,payload:{coins:[2,1,1]}},token)));
-ok((await get(code,screen)).data.totals['3'].every(n=>n===0),'allocation results are hidden before reveal');
-state=(await get(code,host)).data;await control('reveal');ok((await get(code,screen)).data.totals['3'].join(',')==='80,40,40','allocation sum matches all 40 players');
-await control('next');await Promise.all(tokens.map(token=>post({action:'answer',code,stage:4,payload:{choice:1}},token)));state=(await get(code,host)).data;await control('reveal');ok(state.totals['4'][1]===40,'branch narrative votes tally');
-await control('next');await post({action:'answer',code,stage:5,payload:{category:0,text:'互相答疑'}},tokens[0]);
-await control('next');await Promise.all(tokens.map((token,i)=>post({action:'answer',code,stage:6,payload:{choice:i%2}},token)));state=(await get(code,host)).data;await control('reveal');ok(state.totals['6'][0]===20&&state.totals['6'][1]===20,'tied priorities remain tied');
-await control('next');ok(state.stage===7,'host explicitly generates report');ok(state.expiresAt>Date.now()+6.9*86400000,'retention restarts for seven days after the activity ends');const exported=await post({action:'export',code},host);ok(exported.data.answers.length===162,'export includes every successful answer including hidden cards');
-writeFileSync('.sites-runtime/test-room.json',JSON.stringify({code,host,screen}));
-const expiredCode=String(100000+Math.floor(Math.random()*900000));sqlite.prepare('INSERT INTO rooms(code,host_hash,screen_hash,created_at,expires_at) VALUES(?,?,?,?,?)').run(expiredCode,'x','y',1,1);
-ok((await get(expiredCode,host)).status===400,'expired rooms cannot be accessed');
-await post({action:'cleanup'});ok(!sqlite.prepare('SELECT code FROM rooms WHERE code=?').get(expiredCode),'cleanup removes expired room');sqlite.close();
-console.log(JSON.stringify({passed:checks,simultaneousPlayers:40,allAnswersExported:162,elapsedMs:Date.now()-start,localTestRoom:code},null,2));
+import {readFileSync,writeFileSync,mkdirSync,mkdtempSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
+import {createHash} from 'node:crypto';
+import {spawn} from 'node:child_process';
+import {build} from 'esbuild';
+mkdirSync('work',{recursive:true});
+const directory=mkdtempSync(resolve('work/integration-'));
+const database=resolve(directory,'answers.sqlite');
+const hash=s=>createHash('sha256').update(s).digest('hex');
+const oldHost='legacy-host-local-fixture-123456789',oldScreen='legacy-screen-local-fixture-123456789';
+const before=new DatabaseSync(database);before.exec(readFileSync('drizzle/0000_overrated_randall.sql','utf8'));before.exec('CREATE TABLE _migrations(name TEXT PRIMARY KEY)');before.prepare('INSERT INTO _migrations VALUES(?)').run('0000_overrated_randall.sql');before.prepare('INSERT INTO rooms(code,host_hash,screen_hash,created_at,expires_at) VALUES(?,?,?,?,?)').run('123456',hash(oldHost),hash(oldScreen),Date.now(),Date.now()+86400000);before.close();
+const port=3045,base=`http://127.0.0.1:${port}`;
+const server=spawn(process.execPath,['--disable-warning=ExperimentalWarning','standalone-dist/server.mjs'],{env:{...process.env,PORT:String(port),BIND_HOST:'127.0.0.1',DATA_DIR:directory,PUBLIC_ORIGIN:base},stdio:['ignore','pipe','pipe']});
+let output='';server.stdout.on('data',b=>output+=b);server.stderr.on('data',b=>output+=b);
+let checks=0;const ok=(value,label)=>{assert.ok(value,label);checks++;};
+try{
+ for(let i=0;i<80&&!output.includes('已启动');i++){if(server.exitCode!==null)throw new Error(output);await new Promise(r=>setTimeout(r,100));}if(!output.includes('已启动'))throw new Error('Local server did not start');
+ const secret=readFileSync(resolve(directory,'host-key.txt'),'utf8').trim();
+ async function post(body,token='',key='',origin=base){const r=await fetch(base+'/api/game',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{}),...(key?{'X-Host-Key':key}:{})},body:JSON.stringify(body)});return {status:r.status,data:await r.json()};}
+ async function get(code,token){const r=await fetch(base+'/api/game?room='+code,{headers:{Authorization:'Bearer '+token}});return {status:r.status,data:await r.json()};}
+ ok((await fetch(base+'/')).status===200,'standalone HTTP homepage');ok((await fetch(base+'/assets/main.js')).status===200,'browser bundle served');ok((await fetch(base+'/data/host-key.txt')).status===404,'private key cannot be downloaded');ok((await fetch(base+'/api/game',{method:'PUT'})).status===405,'unsupported API method rejected');
+ ok((await post({action:'create'},'','wrong')).status===403,'wrong setup key denied');ok((await post({action:'create'},'',secret,'https://unrelated.invalid')).status===403,'cross-origin write denied');
+ const old=(await get('123456',oldHost)).data;ok(old.rulesVersion===1,'existing room retains old rules after automatic migration');ok((await post({action:'control',code:'123456',command:'next',revision:old.revision},oldHost)).data.stage===1,'legacy host controls still work');
+ const oldJoin=await post({action:'join',code:'123456'});ok(oldJoin.status===200,'legacy participant can join');ok((await post({action:'answer',code:'123456',stage:1,payload:{category:1,text:'旧房间百歌记忆'}},oldJoin.data.token)).status===200,'legacy answers preserved without reinterpretation');
+ const made=await post({action:'create'},'',secret),{code,host,screen}=made.data;ok(made.status===200,'new room created');let state=(await get(code,host)).data;ok(state.rulesVersion===2&&!state.demo,'new formal room uses six-event rules');
+ const control=async command=>{const r=await post({action:'control',code,command,revision:state.revision},host);assert.equal(r.status,200,JSON.stringify(r.data));state=r.data;return state;};
+ const joins=await Promise.all(Array.from({length:40},()=>post({action:'join',code})));ok(joins.every(r=>r.status===200),'40 concurrent joins');const tokens=joins.map(r=>r.data.token);state=(await get(code,host)).data;ok(state.players===40,'40 players retained');ok((await post({action:'seed',code},host)).status===403,'formal room rejects simulated data');ok((await post({action:'export',code},screen)).status===403,'projection cannot export individual votes');ok((await post({action:'control',code,command:'next',revision:state.revision},tokens[0])).status===403,'player cannot control game');
+ const db=new DatabaseSync(database,{timeout:5000});
+ for(let stage=1;stage<=6;stage++){
+  await control('next');ok(state.stage===stage&&state.phase==='ready',`event ${stage} enters waiting state`);
+  const payload=i=>stage===1?{text:'百歌回声 '+i}:stage===2?{shop:i%2?' 东园 小馆 ':'东园小馆',dish:'番茄鸡蛋饭'}:stage===3?{text:'新增功能 '+i,kind:i%3,status:i%4}:stage===4?{picks:[i%2,3]}:stage===5?{text:'班级互助超能力 '+i}:{choice:i%4};
+  ok((await post({action:'answer',code,stage,round:0,payload:payload(0)},tokens[0])).status===400,`event ${stage} rejects answers before start`);
+  await control('start');
+  const results=await Promise.all(tokens.map((t,i)=>post({action:'answer',code,stage,round:0,payload:payload(i)},t)));ok(results.every(r=>r.status===200),`40 concurrent valid answers in event ${stage}`);
+  state=(await get(code,host)).data;ok(state.counts[stage]===40,`event ${stage} counts real participants`);
+  if(stage===1){const text='这是一段不设置逐题字数限制的真实测试回答。'.repeat(3000);ok((await post({action:'answer',code,stage,round:0,payload:{text}},tokens[0])).status===200,'long Chinese answer accepted above old limits and without UTF-8 corruption');const mine=(await get(code,tokens[0])).data.mine['1'];ok(mine.text===text,'long Unicode answer round-trips exactly');state=(await get(code,host)).data;ok(state.counts['1']===40,'edits do not duplicate counts');const hidden=state.cards.find(a=>a.payload.text==='百歌回声 1');await post({action:'hide',code,id:hidden.id,hidden:true},host);ok(!(await get(code,screen)).data.cards.some(a=>a.id===hidden.id),'host hiding removes public card');await post({action:'answer',code,stage,round:0,payload:{text:'修改已隐藏回答'}},tokens[1]);ok(!(await get(code,screen)).data.cards.some(a=>a.id===hidden.id),'participant editing cannot undo host hide');await control('pause');ok((await post({action:'answer',code,stage,round:0,payload:payload(0)},tokens[2])).status===400,'pause blocks answers');await control('resume');db.prepare('UPDATE rooms SET deadline=1,game_end=1 WHERE code=?').run(code);state=(await get(code,host)).data;ok(state.phase==='open'&&state.stage===1,'expired advisory timers never close or advance');ok((await post({action:'answer',code,stage,round:0,payload:payload(3)},tokens[3])).status===200,'advisory deadline does not reject answer');}
+  if(stage===3){const publicState=(await get(code,screen)).data;ok(publicState.totals['3'].join(',')==='10,10,10,10','status votes update live');ok(!publicState.cards.filter(a=>a.stage===3).some(a=>'status' in a.payload),'public cards do not link status votes to text');}
+  if(stage===4){ok((await post({action:'answer',code,stage,round:0,payload:{picks:[0,0]}},tokens[0])).status===400,'duplicate time directions rejected');ok((await post({action:'answer',code,stage,round:0,payload:{picks:[0,1,2]}},tokens[0])).status===400,'more than two time directions rejected');ok((await get(code,screen)).data.totals['4'].join(',')==='20,20,0,40','time vote aggregates live before reveal');}
+  await control('close');ok((await post({action:'answer',code,stage,round:0,payload:payload(0)},tokens[0])).status===400,`event ${stage} rejects late writes`);
+  ok((await post({action:'control',code,command:'next',revision:state.revision},host)).status===400,`event ${stage} requires explicit reveal before next`);
+  await control('reveal');
+ }
+ await control('next');ok(state.stage===7,'report generated only by host');ok(state.expiresAt>Date.now()+6.9*86400000,'seven-day retention restarts after report');const exported=await post({action:'export',code},host);ok(exported.data.answers.length===240,'all six events exported with 240 real answers including hidden text');ok(state.totals['6'].join(',')==='10,10,10,10','tied final votes retain true totals');await control('handoff');ok(state.phase==='handoff','leader transition synchronized');await control('report');ok(state.phase==='revealed','can return to report');
+ const staleRevision=state.revision;await control('reset');ok(state.stage===0&&state.round===1&&!Object.keys(state.counts).length&&state.players===40,'reset atomically clears answers and retains participant credentials');ok((await post({action:'control',code,revision:staleRevision,command:'next'},host)).status===409,'stale host control rejected');await control('next');await control('start');ok((await post({action:'answer',code,stage:1,round:0,payload:{text:'过期草稿'}},tokens[0])).status===400,'pre-reset stale round rejected');ok((await post({action:'answer',code,stage:1,round:1,payload:{text:'重置后新答案'}},tokens[0])).status===200,'same player can answer new round');
+ const dem=await post({action:'create',demo:true},'',secret);let ds=(await get(dem.data.code,dem.data.host)).data;const dc=async command=>{const r=await post({action:'control',code:ds.code,command,revision:ds.revision},dem.data.host);assert.equal(r.status,200);ds=r.data;};ok(ds.demo,'demo room explicitly marked');await dc('next');await dc('start');const seeded=await post({action:'seed',code:ds.code},dem.data.host);ok(seeded.data.players===6&&seeded.data.counts['1']===6,'demo room creates six labeled simulated participants');const again=await post({action:'seed',code:ds.code},dem.data.host);ok(again.data.counts['1']===6,'demo seed is idempotent');ok((await post({action:'export',code:ds.code},dem.data.host)).data.demo,'demo export marked');ok((await get(code,host)).data.counts['1']===1,'demo cannot contaminate formal room');
+ await build({entryPoints:['lib/game.ts'],bundle:true,platform:'node',format:'esm',outfile:resolve(directory,'game.mjs')});const rules=await import('file:///'+resolve(directory,'game.mjs').replaceAll('\\','/'));
+ for(let i=0;i<4;i++)for(let j=i+1;j<4;j++){const v=[0,0,0,0];v[i]=v[j]=10;const branches=rules.allocationStory(v).branches;ok(branches.length===1&&branches[0].pair.join(',')===`${i},${j}`&&branches[0].gain&&branches[0].cost,`balanced narrative branch ${i},${j}`);}
+ ok(rules.allocationStory([8,4,4,0]).branches.length===2,'second-place ties never omit unique top direction');ok(rules.allocationStory([3,3,3,3]).branches.length===6,'four-way tie preserves all six possible combinations');ok(rules.topTwo([4,2,2,0]).join(',')==='0,1,2','map preserves tied second-place candidates');ok(rules.topTwo([0,0,0,0]).length===0,'no votes produce no fabricated winners');
+ const foods=[{id:'a',stage:2,hidden:0,payload:{shop:'东园 小馆',dish:'番茄鸡蛋饭'}},{id:'b',stage:2,hidden:0,payload:{shop:'东园小馆',dish:'番茄鸡蛋饭'}},{id:'c',stage:2,hidden:1,payload:{shop:'东园小馆',dish:'番茄鸡蛋饭'}}];ok(rules.foodGroups(foods)[0].count===2,'food normalization merges equivalent recommendations and excludes hidden cards');
+ db.close();
+ const result={passed:checks,simultaneousPlayers:40,events:6,exportedAnswers:240,legacyMigration:'passed',demoIsolation:'passed',unicodeLongText:'passed',checkedAt:new Date().toISOString()};mkdirSync('work',{recursive:true});writeFileSync('work/test-results.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
+}finally{server.kill();}

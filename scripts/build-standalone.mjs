@@ -1,5 +1,6 @@
+import './build-offline.mjs';
 import { build } from 'esbuild';
-import {mkdirSync,writeFileSync,copyFileSync,readFileSync,readdirSync} from 'node:fs';
+import {mkdirSync,writeFileSync,copyFileSync,readFileSync,statSync} from 'node:fs';
 mkdirSync('standalone-dist/assets',{recursive:true});mkdirSync('standalone-dist/drizzle',{recursive:true});
 await build({entryPoints:['standalone/client.tsx'],bundle:true,minify:true,format:'esm',jsx:'automatic',target:'es2020',outfile:'standalone-dist/assets/main.js'});
 await build({entryPoints:['app/api/game/route.ts'],bundle:true,minify:true,format:'esm',platform:'node',target:'node24',outfile:'standalone-dist/api.mjs',plugins:[{name:'local-database',setup(b){b.onResolve({filter:/^cloudflare:workers$/},()=>({path:'env',namespace:'local-database'}));b.onLoad({filter:/.*/,namespace:'local-database'},()=>({contents:'export const env = globalThis.__DUXING_ENV;',loader:'js'}));}}]});
