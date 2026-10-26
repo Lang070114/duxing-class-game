@@ -24,7 +24,7 @@ export function validatePayload(stage:number,input:unknown):Payload{
  const option=(x:unknown,n:number)=>{if(!Number.isInteger(x)||(x as number)<0||(x as number)>=n)throw new Error('请先选择一个选项');return x as number;};
  if(stage===1||stage===5)return {text:text(a.text)};
  if(stage===2)return {shop:text(a.shop),dish:text(a.dish)};
- if(stage===3)return {text:text(a.text),kind:option(a.kind,3),status:option(a.status,4)};
+ if(stage===3)return {text:text(a.text),status:option(a.status,4)};
  if(stage===4){if(!Array.isArray(a.picks)||a.picks.length!==2||new Set(a.picks).size!==2)throw new Error('请选择两个不同的方向，每项一枚时间币');return {picks:a.picks.map(x=>option(x,4)).sort((x,y)=>x-y)};}
  if(stage===6)return {choice:option(a.choice,4)};
  throw new Error('本关不接受答题');
@@ -32,13 +32,14 @@ export function validatePayload(stage:number,input:unknown):Payload{
 export function topIndices(values:number[]){const max=Math.max(0,...values);return max===0?[]:values.flatMap((n,i)=>n===max?[i]:[]);}
 // A tie at the second-place boundary remains a shared candidate.
 export function topTwo(values:number[]){const sorted=values.filter(n=>n>0).sort((a,b)=>b-a);const cutoff=sorted[Math.min(1,sorted.length-1)];return cutoff===undefined?[]:values.flatMap((n,i)=>n>0&&n>=cutoff?[i]:[]);}
-const BRANCHES:Record<string,{title:string;gain:string;cost:string}>={
- '0,1':{title:'双主线玩家',gain:'课程积累为探索打底，新机会又让所学有了方向。',cost:'两个主线一起推进，留给朋友与恢复的时间需要主动保护。'},
- '0,2':{title:'并肩自习小队',gain:'一起学习，也一起保留热爱；任务有人讨论，快乐有人分享。',cost:'活动与作业撞期时，需要说清边界，并为未来探索留一小格。'},
- '0,3':{title:'稳态续航计划',gain:'扎实学习配合充分恢复，让进步拥有持续的电量。',cost:'节奏稳定之后，也要给新机会和与人相遇留一个入口。'},
- '1,2':{title:'探索搭子出发',gain:'在新体验和同行者中找到方向，兴趣可能成为探索的起点。',cost:'精彩安排很多，课程底线与休息时间需要提前放进日程。'},
- '1,3':{title:'有电才有远方',gain:'带着好状态探索，让尝试有耐心，也有重新出发的力气。',cost:'留白有价值，但仍需要把学习与关系落实到一件件小事。'},
- '2,3':{title:'生活充能联盟',gain:'朋友、兴趣和健康共同补充能量，让生活有可依靠的部分。',cost:'照顾好当下以后，还要给学业与未来确定一个可开始的动作。'},
+export const RESOURCE_SHORT=['学业','探索','同行','续航'];
+const BRANCHES:Record<string,{title:string;ending:string}>={
+ '0,1':{title:'超级进取模式',ending:'学业进度和未来探索同步推进！不过，系统检测到你的日历正在发出红色预警。'},
+ '0,2':{title:'并肩作战模式',ending:'学习和友谊并不矛盾，也许一起学习、互相支持，比独自硬扛更有效率。'},
+ '0,3':{title:'稳定输出模式',ending:'你选择先把重要的事情做好，也为自己保留恢复精力的时间。'},
+ '1,2':{title:'组队探索模式',ending:'新的兴趣与发展机会，有时就是从一次同学间的交流开始的。'},
+ '1,3':{title:'可持续探索模式',ending:'你愿意尝试新的方向，也意识到不能一直依靠透支精力前进。'},
+ '2,3':{title:'生活体验模式',ending:'大学不仅有成绩与履历，也有友情、兴趣和照顾自己的时间。'},
 };
 export function allocationStory(values:number[]){const candidates=topTwo(values);const pairs:number[][]=[];for(let i=0;i<candidates.length;i++)for(let j=i+1;j<candidates.length;j++)if(!values.some((n,k)=>k!==candidates[i]&&k!==candidates[j]&&n>Math.min(values[candidates[i]],values[candidates[j]])))pairs.push([candidates[i],candidates[j]]);return {candidates,tied:candidates.length>2,branches:pairs.map(pair=>({pair,...BRANCHES[pair.join(',')]}))};}
 export function foodGroups(cards:PublicAnswer[]){

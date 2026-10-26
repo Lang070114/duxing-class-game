@@ -15,14 +15,14 @@ async function state(req:Request,code:string){
  const [all,count]=await Promise.all([db().prepare('SELECT * FROM answers WHERE room=? ORDER BY submitted_at,id').bind(code).all<Answer>(),db().prepare('SELECT COUNT(*) AS n FROM players WHERE room=?').bind(code).first<{n:number}>()]);
  const counts:Record<string,number>={},totals:Record<string,number[]>={'3':[0,0,0,0],'4':[0,0,0,0],'6':[0,0,0,0]},mine:Record<string,Payload>={};
  for(const a of all.results){counts[a.stage]=(counts[a.stage]||0)+1;const p:Payload=JSON.parse(a.payload);if(a.player===who.id)mine[a.stage]=p;if(a.stage===3)totals['3'][p.status!]++;if(a.stage===4)p.picks!.forEach(i=>totals['4'][i]++);if(a.stage===6)totals['6'][p.choice!]++;}
- const cards=all.results.filter(a=>[1,2,3,5].includes(a.stage)&&(who.role==='host'||!a.hidden)).map(a=>{const p:Payload=JSON.parse(a.payload);return {id:a.id,stage:a.stage,payload:a.stage===3?{text:p.text,kind:p.kind}:p,hidden:a.hidden,submittedAt:a.submitted_at};});
+ const cards=all.results.filter(a=>[1,2,3,5].includes(a.stage)&&(who.role==='host'||!a.hidden)).map(a=>{const p:Payload=JSON.parse(a.payload);return {id:a.id,stage:a.stage,payload:a.stage===3?{text:p.text}:p,hidden:a.hidden,submittedAt:a.submitted_at};});
  return {rulesVersion:r.rules_version,demo:!!r.is_demo,round:r.round,code,stage:r.stage,phase:r.phase,revision:r.revision,deadline:r.deadline,gameEnd:r.game_end,expiresAt:r.expires_at,serverNow:Date.now(),players:count?.n||0,role:who.role,counts,totals,cards,mine};
 }
 export async function GET(req:Request){try{const code=new URL(req.url).searchParams.get('room')||'';const r=await roomFor(code);if(r.rules_version===1){const response=await legacy.GET(req);return json({...(await response.json() as Record<string,unknown>),rulesVersion:1,round:0,demo:false},response.status);}return json(await state(req,code));}catch(e){return json({error:e instanceof Error?e.message:'读取失败，请重试'},400);}}
 function demoPayload(stage:number,i:number):Payload{
  if(stage===1)return {text:['从不敢开口到一起唱响，原来我们真的能做到。','排练时总说再来一次，上台后只想再来一次。','不是每个人都唱得完美，但每个人都在认真发光。','记住的不是名次，是一起练到很晚的队友。','百歌已通关，合唱技能永久保留。','一群人的声音，真的比一个人的勇气更大。'][i]};
  if(stage===2)return {shop:['东园小馆','东园小馆','校园饭堂','校园饭堂','巷口面馆','巷口面馆'][i],dish:['番茄鸡蛋饭','番茄鸡蛋饭','双拼饭','双拼饭','牛肉面','拌面'][i]};
- if(stage===3)return {kind:i%3,text:['新增主动找队友讨论的功能','修复一个人闷头赶作业的习惯','BUG：待办清单比睡眠还长','新增探索实习与竞赛的地图','修复遇到问题不敢提问的BUG','主线任务加载中，先保持好奇'][i],status:i%4};
+ if(stage===3)return {text:['新增主动找队友讨论的功能','修复一个人闷头赶作业的习惯','BUG：待办清单比睡眠还长','新增探索实习与竞赛的地图','修复遇到问题不敢提问的BUG','主线任务加载中，先保持好奇'][i],status:i%4};
  if(stage===4)return {picks:[[0,1],[0,3],[1,2],[0,1],[0,2],[1,3]][i]};
  if(stage===5)return {text:['DDL前能召唤一位答疑搭子','让每一个想参加活动的人都能找到队友','自动收集靠谱的成长情报','把大家的建议变成有回应的小事','一键发现谁也想去运动','将一份资料共享成全班的底气'][i]};
  return {choice:[0,1,0,1,2,3][i]};
@@ -71,6 +71,7 @@ export async function POST(req:Request){try{
   }
   let stage=r.stage,phase=r.phase,deadline=r.deadline,remaining=r.remaining;
   if(b.command==='next'&&stage<7&&(stage===0||phase==='revealed')){stage++;phase=stage===7?'revealed':'ready';deadline=null;remaining=null;}
+  else if(b.command==='previous'&&stage>0){stage--;phase=stage===0?'open':'revealed';deadline=null;remaining=null;}
   else if(b.command==='start'&&stage>0&&stage<7&&(phase==='ready'||phase==='closed'||phase==='revealed')){phase='open';deadline=now+STAGES[stage].seconds*1000;}
   else if(b.command==='close'&&stage>0&&stage<7&&(phase==='open'||phase==='paused')){phase='closed';deadline=null;remaining=null;}
   else if(b.command==='reveal'&&stage>0&&stage<7&&(phase==='closed'||phase==='open'||phase==='paused')){phase='revealed';deadline=null;remaining=null;}
