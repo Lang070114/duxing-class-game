@@ -18,7 +18,7 @@ export const EVENT_OPTIONS = [
 ];
 export type Payload = { category?: number; text?: string; need?: string; coins?: number[]; choice?: number };
 export type PublicAnswer = { id: string; stage: number; payload: Payload; hidden: number; submittedAt: number };
-export type GameState = { code: string; stage: number; phase: string; revision: number; deadline: number | null; gameEnd: number | null; expiresAt: number; serverNow: number; players: number; role: string; counts: Record<string, number>; totals: Record<string, number[]>; cards: PublicAnswer[]; mine: Record<string, Payload> };
+export type GameState = {revealed?:number[]; code: string; stage: number; phase: string; revision: number; deadline: number | null; gameEnd: number | null; expiresAt: number; serverNow: number; players: number; role: string; counts: Record<string, number>; totals: Record<string, number[]>; cards: PublicAnswer[]; mine: Record<string, Payload> };
 export function validatePayload(stage: number, input: unknown): Payload {
   const a = input as Payload;
   const clean = (x: unknown, max = 60) => {

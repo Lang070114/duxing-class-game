@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { STAGES, validatePayload, type Payload } from '@/lib/game-legacy';
 export const dynamic = 'force-dynamic';
-type Room = { code: string; host_hash: string; screen_hash: string; stage: number; phase: string; revision: number; deadline: number | null; remaining: number | null; game_end: number | null; expires_at: number };
+type Room = { revealed_mask:number; code: string; host_hash: string; screen_hash: string; stage: number; phase: string; revision: number; deadline: number | null; remaining: number | null; game_end: number | null; expires_at: number };
 type Answer = { id: string; player: string; stage: number; payload: string; hidden: number; submitted_at: number };
 const json = (data: unknown, status = 200) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' } });
 const token = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), b => b.toString(16).padStart(2, '0')).join('');
@@ -34,13 +34,14 @@ async function state(req: Request, code: string) {
   for (const a of all.results) {
     counts[a.stage] = (counts[a.stage] || 0) + 1; const p: Payload = JSON.parse(a.payload);
     if (a.player === who.id) mine[a.stage] = p;
-    if (a.stage === r.stage && r.phase !== 'revealed' && r.stage >= 3 && who.role !== 'host') continue;
+    if (a.stage>=3 && !(r.revealed_mask & (1<<a.stage))) continue;
     if (a.stage === 3) p.coins!.forEach((n, i) => totals['3'][i] += n);
     if (a.stage === 4 || a.stage === 6) totals[a.stage][p.choice!]++;
     if (a.stage === 5) totals['5'][p.category!]++;
   }
-  const cards = all.results.filter(a => [1, 2, 5].includes(a.stage) && (who.role === 'host' || !a.hidden)).map(a => ({ id: a.id, stage: a.stage, payload: JSON.parse(a.payload), hidden: a.hidden, submittedAt: a.submitted_at }));
-  return { code, stage: r.stage, phase: r.phase, revision: r.revision, deadline: r.deadline, gameEnd: r.game_end, expiresAt: r.expires_at, serverNow: Date.now(), players: count?.n || 0, role: who.role, counts, totals, cards, mine };
+  for(const key of [3,4,5,6])if(!(r.revealed_mask&(1<<key))){delete counts[key];totals[key]=[];}
+  const cards = all.results.filter(a => [1, 2, 5].includes(a.stage) && (who.role === 'host' || !a.hidden)).map(a => ({ id: a.id, stage: a.stage, payload:a.stage===5?{text:JSON.parse(a.payload).text}:JSON.parse(a.payload), hidden: a.hidden, submittedAt: a.submitted_at }));
+  return { revealed:[1,2,3,4,5,6].filter(i=>!!(r.revealed_mask&(1<<i))),code, stage: r.stage, phase: r.phase, revision: r.revision, deadline: r.deadline, gameEnd: r.game_end, expiresAt: r.expires_at, serverNow: Date.now(), players:r.stage===0||r.stage===7?count?.n||0:0, role: who.role, counts, totals, cards, mine };
 }
 export async function GET(req: Request) {
   try { return json(await state(req, new URL(req.url).searchParams.get('room') || '')); }
@@ -108,7 +109,7 @@ export async function POST(req: Request) {
       else if (b.command === 'finish') { stage = 7; phase = 'revealed'; deadline = null; }
       else throw new Error('当前不能执行这个操作');
       const expiry = stage === 7 && r.stage !== 7 ? now + 7 * 86400000 : r.expires_at;
-      const result = await db().prepare('UPDATE rooms SET stage=?,phase=?,deadline=?,remaining=?,game_end=?,expires_at=?,revision=revision+1 WHERE code=? AND revision=?').bind(stage, phase, deadline, remaining, end, expiry, r.code, r.revision).run();
+      const result = await db().prepare(`UPDATE rooms SET revealed_mask=CASE WHEN ?='reveal' THEN revealed_mask | (1 << stage) WHEN ?='extend' THEN revealed_mask & ~(1 << stage) ELSE revealed_mask END,stage=?,phase=?,deadline=?,remaining=?,game_end=?,expires_at=?,revision=revision+1 WHERE code=? AND revision=?`).bind(b.command,b.command,stage, phase, deadline, remaining, end, expiry, r.code, r.revision).run();
       if (!result.meta.changes) return json({ error: '操作冲突，请重试' }, 409);
       return json(await state(req, r.code));
     }

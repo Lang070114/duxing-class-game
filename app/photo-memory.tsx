@@ -1,0 +1,8 @@
+'use client';
+import {useEffect,useState} from 'react';
+export function PhotoMemory({code,host}:{code:string;host:boolean}){
+ const key='duxing:authorized-photos:'+code,[photos,setPhotos]=useState<string[]>([]),[error,setError]=useState('');
+ useEffect(()=>{const load=()=>{try{setPhotos(JSON.parse(localStorage.getItem(key)||'[]'));}catch{setPhotos([]);}};load();window.addEventListener('storage',load);return()=>window.removeEventListener('storage',load);},[key]);
+ async function select(files:FileList|null){if(!files?.length)return;setError('');try{const next:string[]=[];for(const file of [...files].slice(0,6)){const bmp=await createImageBitmap(file),scale=Math.min(1,1200/bmp.width,900/bmp.height),canvas=document.createElement('canvas');canvas.width=Math.round(bmp.width*scale);canvas.height=Math.round(bmp.height*scale);canvas.getContext('2d')!.drawImage(bmp,0,0,canvas.width,canvas.height);next.push(canvas.toDataURL('image/jpeg',.8));bmp.close();}localStorage.setItem(key,JSON.stringify(next));setPhotos(next);}catch{setError('照片暂未保存。请换用较小的JPG/PNG，并保持主持页与投影页在同一浏览器。');}}
+ return <section className="photo-memory">{photos.length>0&&<><div className="memory-photos">{photos.map((src,i)=><img src={src} alt={'获授权的百歌回忆照片 '+(i+1)} key={src.slice(-40)+i}/>)}</div><small>班长选择的授权照片 · 保存在本机浏览器，不上传服务器</small></>}{host&&<details><summary>添加已获授权的演出照片（可选）</summary><p>请确认照片中同学同意用于本次班会。照片只保存在此浏览器，同一浏览器打开投影页即可显示，不进入答题统计或报告。最多选6张。</p><input type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="选择已获授权的百歌照片" onChange={e=>select(e.target.files)}/><button type="button" className="text-button" onClick={()=>{localStorage.removeItem(key);setPhotos([]);}}>移除本机照片</button>{error&&<p role="status">{error}</p>}</details>}</section>;
+}
