@@ -1,4 +1,4 @@
-import {RESOURCES,BUDDIES,statusesFor,prioritiesFor,stageFor,hasRevealed,allocationStory,topTwo,foodGroups,type GameState} from './game';
+import {MOVIES,HANDOFF,topIndices,RESOURCES,BUDDIES,statusesFor,prioritiesFor,stageFor,hasRevealed,allocationStory,topTwo,foodGroups,type GameState} from './game';
 import {keywordCloud,layoutWordCloud,type Keyword} from './wordcloud';
 export type ReportBlock={kind:'title'|'heading'|'text'|'cloud'|'votes';text?:string;words?:Keyword[];labels?:string[];values?:number[];people?:number};
 export function reportBlocks(state:GameState):ReportBlock[]{
@@ -6,24 +6,27 @@ export function reportBlocks(state:GameState):ReportBlock[]{
  add('title','笃行班 · 大二生存锦囊');add('text',`房间 ${state.code} · ${state.demo?'演示报告（含模拟数据，不代表正式结果）':'依据本场真实提交整理'}\n${state.source||state.players+'人加入'}；各项结果仅代表有效参与者，不代表全班共识。`);
  const cards=state.cards.filter(a=>!a.hidden&&a.payload.text?.trim());
  for(let stage=1;stage<=6;stage++){
+  if(state.rulesVersion>=4&&stage===6)continue;
   add('heading',`0${stage} / ${stageFor(stage,state.rulesVersion).title}`);
-  const labels=stage===3?statusesFor(state):stage===4?RESOURCES:stage===5&&state.rulesVersion>=3?BUDDIES:stage===6?prioritiesFor(state):null;
+  const labels=stage===3?statusesFor(state):stage===4?RESOURCES:stage===5&&state.rulesVersion>=4?MOVIES.map(m=>m.name):stage===5&&state.rulesVersion>=3?BUDDIES:stage===6?prioritiesFor(state):null;
   if(labels){
    if(!hasRevealed(state,stage))add('text','本关尚未揭晓，统计结果不进入报告。');
-   else {const count=state.counts[stage]||0;add('text',`${count}人有效参与${count<5?' · 参与较少，仅作参考':''}；${stage===4||stage===6&&state.rulesVersion>=3?'每人选两项，比例之和可达200%。':stage===5?'可多选，比例之和可能超过100%。':'每人一票。'}`);if(!count)add('text','暂无有效投票，不生成排名或共同结论。');else blocks.push({kind:'votes',labels,values:state.totals[stage],people:count,text:labels.map((t,i)=>`${t}：${state.totals[stage]?.[i]||0}票 · ${Math.round((state.totals[stage]?.[i]||0)/count*100)}%`).join('\n')});}
+   else {const count=state.counts[stage]||0;add('text',`${count}人有效参与${count<5?' · 参与较少，仅作参考':''}；${stage===4||stage===6&&state.rulesVersion>=3?'每人选两项，比例之和可达200%。':stage===5&&state.rulesVersion===3?'可多选，比例之和可能超过100%。':'每人一票。'}`);if(!count)add('text','暂无有效投票，不生成排名或共同结论。');else blocks.push({kind:'votes',labels,values:state.totals[stage],people:count,text:labels.map((t,i)=>`${t}：${state.totals[stage]?.[i]||0}票 · ${Math.round((state.totals[stage]?.[i]||0)/count*100)}%`).join('\n')});}
   }
   if(stage===2){const groups=foodGroups(state.cards);if(!groups.length)add('text','暂无公开推荐；没有添加预设店铺。');for(const g of groups)add('text',`${g.shop} · ${g.dish}（${g.count}人推荐）`);}
   if([1,3,5].includes(stage)){
-   const replies=cards.filter(a=>a.stage===stage);if(!replies.length)add('text','暂无公开留言；分享自愿，不影响流程。');
+   const replies=cards.filter(a=>a.stage===stage&&(state.rulesVersion<4||stage!==5||hasRevealed(state,5)));
+   if(stage===5&&state.rulesVersion>=4&&hasRevealed(state,5)){const winners=topIndices(state.totals['5']||[]);add('text',winners.length?(winners.length>1?'并列最高票：':'本轮最高票：')+winners.map(i=>MOVIES[i].name).join('、'):'没有有效投票，不指定类型。');winners.forEach(i=>add('text',MOVIES[i].ending));}if(!replies.length)add('text','暂无公开留言；分享自愿，不影响流程。');
    if(stage===3&&hasRevealed(state,3)){const stats=keywordCloud(cards);if(stats.words.length){blocks.push({kind:'cloud',words:stats.words});add('text','关键词按提及人数计数，否定短语保留原意：'+stats.words.map(w=>`${w.text}（${w.count}人）`).join('、'));}else add('text','没有有效关键词，保留空白，不补写观点。');}
    replies.forEach(a=>add('text',`匿名原话：${a.payload.text}`));
   }
   if(stage===4&&hasRevealed(state,4)){const story=allocationStory(state.totals['4']||[]);story.branches.forEach(b=>add('text',`${b.title}：${b.ending}`));if(!story.branches.length)add('text','实际选择不足，不编造剧情结论。');}
   if(stage===1&&hasRevealed(state,1))add('text',cards.some(a=>a.stage===1)?'回忆道具：同频回声。源于本场已公开的百歌留言。':'没有文字留言也不影响继续参与，回忆不必每次说出口。');
-  if(stage===5)add('text','联系方式不收集，谁选择了哪一类不公开；愿意的同学会后在班群自行邀请。');
+  if(stage===5&&state.rulesVersion<4)add('text','联系方式不收集，谁选择了哪一类不公开；愿意的同学会后在班群自行邀请。');
   if(stage===6&&hasRevealed(state,6)){const candidates=topTwo(state.totals['6']||[]);if(candidates.length)add('text','得票较高的待讨论候选：'+candidates.map(i=>prioritiesFor(state)[i]).join('、')+(candidates.length>2?'。第二名边界并列，保留所有同票候选。':'。')+((state.counts['6']||0)<5?'参与较少，仍需继续征询。':''));}
   if(stage===6)add('text','以上仅为待讨论的候选。会后仍需班委确认可行性、负责人和时间，不构成现场承诺。');
  }
+ if(state.rulesVersion>=4)add('text',HANDOFF[0]);
  add('heading','游戏结束，但我们的故事还在继续。');add('text','从这些真实的感受出发，接下来有请院领导为笃行班送上建议与寄语。');return blocks;
 }
 const FONT='"Microsoft YaHei","PingFang SC","Noto Sans CJK SC",sans-serif';

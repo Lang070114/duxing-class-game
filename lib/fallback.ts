@@ -8,3 +8,5 @@ export const FALLBACKS:Record<number,{title:string;body:string;example?:string}>
  6:{title:'先留住四个想法',body:'东校园干饭情报局、兴趣搭子计划、百歌隐藏相册、班级活动盲盒，都是待讨论的候选。投票不足时不选“全班最想要”，由班委会后继续征询；是否可行、谁来负责、何时开展，都需要另行确认。'},
 };
 export const PARTICIPATION_NOTE='仅代表本轮有效参与者的选择，不代表全班共识。';
+
+export const fallbackFor=(stage:number,version:number)=>stage===5&&version>=4?{title:'每个人看到的电影，可以不一样',body:'喜剧、成长、冒险、群像、职场预演、悬疑，都可以是大学生活的一面。无人投票时不指定类型；片名选填，不要求解释个人选择。直接进入结局和老师寄语即可。'}:FALLBACKS[stage];

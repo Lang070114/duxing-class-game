@@ -20,7 +20,7 @@ let checks=0;const ok=(value,label)=>{assert.ok(value,label);checks++;};
 try{
  for(let i=0;i<80&&!output.includes('已启动');i++){if(server.exitCode!==null)throw new Error(output);await new Promise(r=>setTimeout(r,100));}if(!output.includes('已启动'))throw new Error('Local server did not start');
  const secret=readFileSync(resolve(directory,'host-key.txt'),'utf8').trim();
- async function post(body,token='',key='',origin=base){const r=await fetch(base+'/api/game',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{}),...(key?{'X-Host-Key':key}:{})},body:JSON.stringify(body)});return {status:r.status,data:await r.json()};}
+ async function post(body,token='',key='',origin=base){const r=await fetch(base+'/api/game',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{}),...(key?{'X-Host-Key':key}:{})},body:JSON.stringify(body)});const data=await r.json();if(body.action==='create'&&r.status===200&&body.rulesVersion!==4){const fixture=new DatabaseSync(database);fixture.prepare('UPDATE rooms SET rules_version=3 WHERE code=?').run(data.code);fixture.close();}return {status:r.status,data};}
  async function get(code,token){const r=await fetch(base+'/api/game?room='+code,{headers:{Authorization:'Bearer '+token}});return {status:r.status,data:await r.json()};}
  ok((await fetch(base+'/')).status===200,'standalone HTTP homepage');ok((await fetch(base+'/assets/main.js')).status===200,'browser bundle served');ok((await fetch(base+'/data/host-key.txt')).status===404,'private key cannot be downloaded');ok((await fetch(base+'/api/game',{method:'PUT'})).status===405,'unsupported API method rejected');
  ok((await post({action:'create'},'','wrong')).status===403,'wrong setup key denied');ok((await post({action:'create'},'',secret,'https://unrelated.invalid')).status===403,'cross-origin write denied');
@@ -88,6 +88,41 @@ try{
  ok(!cloud.extractKeywords('非常、特别、比较').length,'degree words are not mistaken for negative clauses');ok(!cloud.extractKeywords('很、就是、然后').length,'fillers do not produce keywords');ok(cloud.extractKeywords('不焦虑，但有点疲惫').includes('不焦虑')&&cloud.extractKeywords('不焦虑，但有点疲惫').includes('疲惫'),'contrast preserves both separate meanings');ok(!cloud.extractKeywords('非学习类活动').includes('学习'),'unknown negative phrase not stripped');
  const opposite=cloud.keywordCloud([{id:'no',stage:3,hidden:0,payload:{text:'不喜欢'}},{id:'yes',stage:3,hidden:0,payload:{text:'喜欢'}}]);ok(opposite.words.length===2&&opposite.words.every(w=>w.count===1),'opposite expressions never merged');
 
+
+ // Movie finale: actual new-room rules, optional title, independent vote, review and navigation.
+ const movie=(await post({action:'create',rulesVersion:4},'',secret)).data;
+ let ms=(await get(movie.code,movie.host)).data;ok(ms.rulesVersion===4,'new rooms use five-event movie rules');
+ const mc=async command=>{const r=await post({action:'control',code:movie.code,command,revision:ms.revision},movie.host);assert.equal(r.status,200,JSON.stringify(r.data));ms=r.data;};
+ for(let n=1;n<=4;n++){await mc('next');await mc('start');await mc('close');await mc('reveal');}
+ await mc('next');await mc('start');ok(ms.stage===5,'movie follows first four events');
+ const mt=await Promise.all(Array.from({length:8},async()=> (await post({action:'join',code:movie.code})).data.token));
+ for(const payload of [{text:'只有片名'},{choice:6},{choice:[0,1]},{buddies:[0]}])ok((await post({action:'answer',code:movie.code,stage:5,round:0,payload},mt[0])).status===400,'movie requires exactly one of six types');
+ const titles=['','我们这群人','不确定的明天','第一行\n第二行 '+ '长片名'.repeat(3000),'四个字','五个字','',''];
+ const picks=[0,0,1,1,2,3,4,5];
+ for(let i=0;i<8;i++)ok((await post({action:'answer',code:movie.code,stage:5,round:0,payload:{choice:picks[i],text:titles[i]}},mt[i])).status===200,'optional and multiline movie title accepted');
+ for(const t of [movie.host,movie.screen,mt[0]]){const st=(await get(movie.code,t)).data;ok(st.counts['5']===8&&!st.totals['5'].length,'only overall movie participation count visible before reveal');}
+ ok(!(await get(movie.code,movie.screen)).data.cards.some(a=>a.stage===5),'unapproved titles never public');
+ ms=(await get(movie.code,movie.host)).data;let title=ms.cards.find(a=>a.payload.text===titles[1]);ok(title.hidden===2,'all real nonempty movie titles await moderation');
+ await post({action:'hide',code:movie.code,id:title.id,hidden:false},movie.host);ok(!(await get(movie.code,movie.screen)).data.cards.some(a=>a.stage===5),'even approved titles await reveal');
+ await mc('close');ok(!ms.totals['5'].length,'close still hides movie distribution');await mc('reveal');
+ ok(ms.totals['5'].join(',')==='2,2,1,1,1,1','real single-choice movie totals and tie');
+ ok(rules.topIndices(ms.totals['5']).join(',')==='0,1','tie keeps both highest types');
+ let pub=(await get(movie.code,movie.screen)).data;ok(pub.cards.filter(a=>a.stage===5).length===1&&pub.cards.find(a=>a.stage===5).payload.text===titles[1],'only approved title displayed');ok(!('choice' in pub.cards.find(a=>a.stage===5).payload),'public title not associated with individual vote');
+ let rb=report.reportBlocks(ms);ok(rb.some(b=>b.text?.includes('并列最高票：喜剧片、成长片'))&&!rb.some(b=>b.text?.includes(titles[2])),'report contains movie tie and excludes pending titles');
+ await mc('next');ok(ms.stage===7,'old sixth event removed from new-room navigation');await mc('handoff');ok(ms.phase==='handoff','movie leader handoff works');await mc('previous');ok(ms.stage===5,'report previous returns to movie');await mc('start');
+ ok(!ms.totals['5'].length,'reopening movie hides results');ok(!report.reportBlocks(ms).some(b=>b.text?.includes('匿名原话：'+titles[1])),'unrevealed movie titles excluded from report');
+ await post({action:'answer',code:movie.code,stage:5,round:0,payload:{choice:5,text:'修改过的片名'}},mt[1]);ms=(await get(movie.code,movie.host)).data;ok(ms.counts['5']===8&&ms.cards.find(a=>a.payload.text==='修改过的片名').hidden===2,'editing does not duplicate votes and requires title reapproval');
+ const rawMovie=(await post({action:'export',code:movie.code},movie.host)).data;ok(rawMovie.answers.length===8&&JSON.parse(rawMovie.answers.find(a=>JSON.parse(a.payload).text===titles[3]).payload).text===titles[3],'export preserves long original title and separate choice field');
+ await mc('reset');await mc('finish');await mc('previous');ok(ms.stage===5,'zero-participation room can enter movie');await mc('reveal');ok(!rules.topIndices(ms.totals['5']).length,'zero participation never invents winner');await mc('next');ok(ms.stage===7,'zero participation can finish movie');
+ ok(rules.MOVIES.length===6&&rules.stagesFor(4).filter(s=>s.id>0&&s.id<7).length===5,'six options and five new events');
+ {const md=(await post({action:'create',rulesVersion:4,demo:true},'',secret)).data;let ds=(await get(md.code,md.host)).data;
+ const dc=async command=>{const r=await post({action:'control',code:md.code,command,revision:ds.revision},md.host);assert.equal(r.status,200);ds=r.data;};
+ for(let n=1;n<=5;n++){await dc('next');await dc('start');if(n<5){await dc('close');await dc('reveal');}}
+ ds=(await post({action:'seed',code:md.code},md.host)).data;ok(ds.counts['5']===6&&ds.cards.filter(c=>c.stage===5).every(c=>c.hidden===2),'movie demo titles also await approval');
+ const approvedDemo=ds.cards.find(c=>c.stage===5);await post({action:'hide',code:md.code,id:approvedDemo.id,hidden:false},md.host);
+ ds=(await post({action:'seed',code:md.code},md.host)).data;ok(ds.counts['5']===6&&ds.cards.find(c=>c.id===approvedDemo.id).hidden===0,'repeated demo seeding preserves review and does not duplicate votes');
+ await dc('close');await dc('reveal');ok(ds.totals['5'].every(n=>n===1)&&rules.topIndices(ds.totals['5']).length===6,'all six movie types can tie in a clearly marked demo');
+ }
  db.close();
- const result={passed:checks,simultaneousPlayers:40,events:6,exportedAnswers:240,legacyMigration:'passed',demoIsolation:'passed',unicodeLongText:'passed',checkedAt:new Date().toISOString()};mkdirSync('work',{recursive:true});writeFileSync('work/test-results.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
+ const result={passed:checks,simultaneousPlayers:40,legacyEvents:6,newEvents:5,movieFinaleChecks:40,exportedAnswers:240,legacyMigration:'passed',demoIsolation:'passed',unicodeLongText:'passed',checkedAt:new Date().toISOString()};mkdirSync('work',{recursive:true});writeFileSync('work/test-results.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
 }finally{server.kill();}

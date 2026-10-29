@@ -38,6 +38,6 @@ const server=http.createServer(async(req,res)=>{try{
  if(!existsSync(file)){res.writeHead(404);res.end();return;}
  const bytes=readFileSync(file);res.writeHead(200,{'Content-Type':mime[extname(file)]||'application/octet-stream','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Cache-Control':'no-cache'});res.end(req.method==='HEAD'?undefined:bytes);
  }catch(e){res.writeHead(500,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify({error:'服务暂时未能完成请求，请重试'}));console.error(e.message);}});
-server.listen(port,bind,()=>{console.log('\n笃行班多人游戏 v0.5.0 已启动。\n');console.log(publicOrigin?'云端模式：无需同一Wi-Fi。':'局域网模式：电脑与同学手机需连接同一网络。');console.log('主持入口：'+mainAddress+'/?view=host');console.log('本机预览：http://127.0.0.1:'+port);console.log('私密主持说明：'+resolve(dataDir,'主持说明.txt'));console.log('手动运行时保持窗口打开；后台服务由系统自动管理。\n');});
+server.listen(port,bind,()=>{console.log('\n笃行班多人游戏 v0.6.0 已启动。\n');console.log(publicOrigin?'云端模式：无需同一Wi-Fi。':'局域网模式：电脑与同学手机需连接同一网络。');console.log('主持入口：'+mainAddress+'/?view=host');console.log('本机预览：http://127.0.0.1:'+port);console.log('私密主持说明：'+resolve(dataDir,'主持说明.txt'));console.log('手动运行时保持窗口打开；后台服务由系统自动管理。\n');});
 function shutdown(){clearInterval(interval);server.close(()=>{sqlite.close();process.exit(0);});}
 process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown);
