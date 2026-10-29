@@ -16,3 +16,10 @@ export const answers = sqliteTable('answers', {
   stage: integer('stage').notNull(), payload: text('payload').notNull(), hidden: integer('hidden').notNull().default(0),
   submittedAt: integer('submitted_at').notNull(),
 }, (t) => [uniqueIndex('answer_once').on(t.room, t.player, t.stage)]);
+
+export const messages = sqliteTable('messages', {
+  id: text('id').primaryKey(), room: text('room').notNull().references(() => rooms.code, { onDelete: 'cascade' }),
+  player: text('player').notNull().references(() => players.id, { onDelete: 'cascade' }),
+  stage: integer('stage').notNull(), payload: text('payload').notNull(), hidden: integer('hidden').notNull().default(0),
+  submittedAt: integer('submitted_at').notNull(), requestKey: text('request_key').notNull(),
+}, (t) => [uniqueIndex('message_delivery_once').on(t.room, t.player, t.stage, t.requestKey)]);

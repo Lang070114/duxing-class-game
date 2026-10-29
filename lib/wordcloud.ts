@@ -36,8 +36,8 @@ export function extractKeywords(text:string,useSegmenter=true):string[]{
 }
 export function keywordCloud(cards:PublicAnswer[],useSegmenter=true){
  const source=cards.filter(a=>a.stage===3&&!a.hidden&&a.payload.text?.trim());
- const entries=source.map(a=>({id:a.id,text:a.payload.text!,words:extractKeywords(a.payload.text!,useSegmenter)}));const words=new Map<string,Keyword>();
- for(const entry of entries)for(const word of entry.words){const old=words.get(word)||{text:word,count:0,ids:[]};old.count++;old.ids.push(entry.id);words.set(word,old);}
+ const entries=source.map(a=>({id:a.id,authorKey:a.authorKey||a.id,text:a.payload.text!,words:extractKeywords(a.payload.text!,useSegmenter)}));const words=new Map<string,Keyword>(),authors=new Map<string,Set<string>>();
+ for(const entry of entries)for(const word of entry.words){const old=words.get(word)||{text:word,count:0,ids:[]};const seen=authors.get(word)||new Set<string>();if(!seen.has(entry.authorKey)){old.count++;seen.add(entry.authorKey);}authors.set(word,seen);old.ids.push(entry.id);words.set(word,old);}
  return {entries,words:[...words.values()].sort((a,b)=>b.count-a.count||a.text.localeCompare(b.text,'zh-CN'))};
 }
 export type PlacedWord=Keyword&{x:number;y:number;size:number;width:number;height:number};

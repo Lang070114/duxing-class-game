@@ -22,8 +22,8 @@ export const PATCH_KINDS=['新增功能','修复的问题','新出现的 BUG'];
 export const PRIORITIES=['东校园干饭情报局','兴趣搭子计划','百歌隐藏相册','班级活动盲盒'];
 export const FACILITY_DETAILS=['收集同学实际吃过的店和菜品，供大家参考。','自愿约一次运动、兴趣或散步，不安排强制配对。','在获得授权后整理演出照片，不公开未经同意的照片。','先征集轻量活动想法，再确认时间和负责人。'];
 export type Payload={text?:string;shop?:string;dish?:string;kind?:number;status?:number;picks?:number[];choice?:number;buddies?:number[]};
-export type PublicAnswer={id:string;stage:number;payload:Payload;hidden:number;submittedAt:number};
-export type GameState={source?:string;rulesVersion:number;revealed:number[];fallbacks:number[];demo:boolean;round:number;code:string;stage:number;phase:string;revision:number;deadline:number|null;gameEnd:number|null;expiresAt:number;serverNow:number;players:number;role:string;counts:Record<string,number>;totals:Record<string,number[]>;cards:PublicAnswer[];mine:Record<string,Payload>};
+export type PublicAnswer={authorKey?:string;id:string;stage:number;payload:Payload;hidden:number;submittedAt:number};
+export type GameState={ownMessages?:PublicAnswer[];source?:string;rulesVersion:number;revealed:number[];fallbacks:number[];demo:boolean;round:number;code:string;stage:number;phase:string;revision:number;deadline:number|null;gameEnd:number|null;expiresAt:number;serverNow:number;players:number;role:string;counts:Record<string,number>;totals:Record<string,number[]>;cards:PublicAnswer[];mine:Record<string,Payload>};
 export const MAX_REQUEST_BYTES=1024*1024;
 export function validatePayload(stage:number,input:unknown,version=3):Payload{
  if(!input||typeof input!=='object'||Array.isArray(input))throw new Error('答案格式不正确');
@@ -54,8 +54,8 @@ const BRANCHES:Record<string,{title:string;ending:string}>={
 };
 export function allocationStory(values:number[]){const candidates=topTwo(values);const pairs:number[][]=[];for(let i=0;i<candidates.length;i++)for(let j=i+1;j<candidates.length;j++)if(!values.some((n,k)=>k!==candidates[i]&&k!==candidates[j]&&n>Math.min(values[candidates[i]],values[candidates[j]])))pairs.push([candidates[i],candidates[j]]);return {candidates,tied:candidates.length>2,branches:pairs.map(pair=>({pair,...BRANCHES[pair.join(',')]}))};}
 export function foodGroups(cards:PublicAnswer[]){
- const groups=new Map<string,{shop:string;dish:string;count:number}>();const norm=(s:string)=>s.normalize('NFKC').toLocaleLowerCase().replace(/[\s\p{P}\p{S}]/gu,'');
- for(const a of cards.filter(a=>a.stage===2&&!a.hidden)){const {shop='',dish=''}=a.payload;const key=JSON.stringify([norm(shop),norm(dish)]);const old=groups.get(key);if(old)old.count++;else groups.set(key,{shop,dish,count:1});}
+ const groups=new Map<string,{shop:string;dish:string;count:number}>(),authors=new Map<string,Set<string>>();const norm=(s:string)=>s.normalize('NFKC').toLocaleLowerCase().replace(/[\s\p{P}\p{S}]/gu,'');
+ for(const a of cards.filter(a=>a.stage===2&&!a.hidden)){const {shop='',dish=''}=a.payload;const key=JSON.stringify([norm(shop),norm(dish)]);const seen=authors.get(key)||new Set<string>();if(seen.has(a.authorKey||a.id))continue;seen.add(a.authorKey||a.id);authors.set(key,seen);const old=groups.get(key);if(old)old.count++;else groups.set(key,{shop,dish,count:1});}
  return [...groups.values()].sort((a,b)=>b.count-a.count||a.shop.localeCompare(b.shop,'zh-CN'));
 }
 export function echoUnlocked(state:GameState){return state.cards.some(a=>a.stage===1&&!a.hidden)&&(state.stage>1||state.phase==='revealed');}

@@ -13,14 +13,17 @@ async function roomFor(code:string){if(!/^\d{6}$/.test(code))throw new Error('�
 async function identity(req:Request,r:Room){const raw=req.headers.get('Authorization')?.replace(/^Bearer /,'')||'';if(raw.length<20||raw.length>200)throw new Error('请重新加入房间');const hash=await digest(raw);if(hash===r.host_hash)return {role:'host',id:''};if(hash===r.screen_hash)return {role:'screen',id:''};const p=await db().prepare('SELECT id FROM players WHERE room=? AND token_hash=?').bind(r.code,hash).first<{id:string}>();if(!p)throw new Error('参与凭证无效，请重新加入房间');return {role:'player',id:p.id};}
 async function state(req:Request,code:string){
  const r=await roomFor(code);const who=await identity(req,r);
- const [all,count]=await Promise.all([db().prepare('SELECT * FROM answers WHERE room=? ORDER BY submitted_at,id').bind(code).all<Answer>(),db().prepare('SELECT COUNT(*) AS n FROM players WHERE room=?').bind(code).first<{n:number}>()]);
+ const [all,count,messages]=await Promise.all([db().prepare('SELECT * FROM answers WHERE room=? ORDER BY submitted_at,id').bind(code).all<Answer>(),db().prepare('SELECT COUNT(*) AS n FROM players WHERE room=?').bind(code).first<{n:number}>(),db().prepare('SELECT * FROM messages WHERE room=? ORDER BY submitted_at,id').bind(code).all<Answer>()]);
  const counts:Record<string,number>={},totals:Record<string,number[]>={'3':[0,0,0,0],'4':[0,0,0,0],'5':[0,0,0,0,0,0],'6':[0,0,0,0]},mine:Record<string,Payload>={};
  for(const a of all.results){counts[a.stage]=(counts[a.stage]||0)+1;const p:Payload=JSON.parse(a.payload);if(a.player===who.id)mine[a.stage]=p;if(a.stage===3&&p.status!==undefined)totals['3'][p.status]++;if(a.stage===4)p.picks?.forEach(i=>totals['4'][i]++);if(a.stage===5){if(r.rules_version>=4&&p.choice!==undefined)totals['5'][p.choice]++;else if(r.rules_version>=3)p.buddies?.forEach(i=>totals['5'][i]++);}if(a.stage===6){if(r.rules_version>=3)p.picks?.forEach(i=>totals['6'][i]++);else if(p.choice!==undefined)totals['6'][p.choice]++;}}
  const revealed=[1,2,3,4,5,6].filter(i=>!!(r.revealed_mask&(1<<i)));
  // Redact at the API boundary for every role, including a host page being projected.
  for(const key of Object.keys(totals))if(!revealed.includes(Number(key))){totals[key]=[];if(!(r.rules_version>=4&&key==='5'))delete counts[key];}
- const cards=all.results.filter(a=>[1,2,3,5].includes(a.stage)&&(who.role==='host'||a.hidden===0&&(!(r.rules_version>=4&&a.stage===5)||revealed.includes(5)))).map(a=>{const p:Payload=JSON.parse(a.payload);return {id:a.id,stage:a.stage,payload:a.stage===3||a.stage===5?{text:p.text}:p,hidden:a.hidden,submittedAt:a.submitted_at};}).filter(a=>!(r.rules_version>=4&&a.stage===5)||a.payload.text?.trim());
- return {rulesVersion:r.rules_version,revealed,fallbacks:[1,2,3,4,5,6].filter(i=>!!(r.fallback_mask&(1<<i))),demo:!!r.is_demo,round:r.round,code,stage:r.stage,phase:r.phase,revision:r.revision,deadline:r.deadline,gameEnd:r.game_end,expiresAt:r.expires_at,serverNow:Date.now(),players:r.stage===0||r.stage===7?count?.n||0:0,role:who.role,counts,totals,cards,mine};
+ const sources=[...all.results.filter(a=>![1,2,3].includes(a.stage)),...messages.results].sort((a,b)=>a.submitted_at-b.submitted_at||a.id.localeCompare(b.id));
+ const authorKeys=new Map<string,string>();for(const a of messages.results){const key=a.stage+':'+a.player;if(!authorKeys.has(key))authorKeys.set(key,await digest(code+':'+key));}
+ const cards=sources.filter(a=>[1,2,3,5].includes(a.stage)&&(who.role==='host'||a.hidden===0&&(!(r.rules_version>=4&&a.stage===5)||revealed.includes(5)))).map(a=>{const p:Payload=JSON.parse(a.payload);return {id:a.id,stage:a.stage,payload:a.stage===3||a.stage===5?{text:p.text}:p,authorKey:authorKeys.get(a.stage+':'+a.player),hidden:a.hidden,submittedAt:a.submitted_at};}).filter(a=>!(r.rules_version>=4&&a.stage===5)||a.payload.text?.trim());
+ const ownMessages=who.role==='player'?messages.results.filter(a=>a.player===who.id).map(a=>({id:a.id,stage:a.stage,payload:JSON.parse(a.payload) as Payload,hidden:a.hidden,submittedAt:a.submitted_at})):[];
+ return {rulesVersion:r.rules_version,revealed,fallbacks:[1,2,3,4,5,6].filter(i=>!!(r.fallback_mask&(1<<i))),demo:!!r.is_demo,round:r.round,code,stage:r.stage,phase:r.phase,revision:r.revision,deadline:r.deadline,gameEnd:r.game_end,expiresAt:r.expires_at,serverNow:Date.now(),players:r.stage===0||r.stage===7?count?.n||0:0,role:who.role,counts,totals,cards,mine,ownMessages};
 }
 export async function GET(req:Request){try{const code=new URL(req.url).searchParams.get('room')||'';const r=await roomFor(code);if(r.rules_version===1){const response=await legacy.GET(req);return json({...(await response.json() as Record<string,unknown>),rulesVersion:1,round:0,demo:false},response.status);}return json(await state(req,code));}catch(e){return json({error:e instanceof Error?e.message:'读取失败，请重试'},400);}}
 function demoPayload(stage:number,i:number,version:number):Payload{
@@ -56,25 +59,53 @@ export async function POST(req:Request){try{
   if(b.round!==r.round||b.stage!==r.stage||r.phase!=='open')throw new Error('本轮已停止收集或已重置，请等待页面同步');
   const payload=validatePayload(r.stage,b.payload,r.rules_version);
   const pending=(r.rules_version>=4&&r.stage===5&&payload.text?.trim())||reviewReason(payload)?2:0;
+  if([1,2,3].includes(r.stage)){
+   const hasMessage=r.stage!==3||!!payload.text?.trim();
+   if(b.submissionId!==undefined&&(typeof b.submissionId!=='string'||!/^[a-zA-Z0-9_-]{20,80}$/.test(b.submissionId)))throw new Error('发送标识无效，请刷新后重试');
+   // One delivery key survives uncertain network retries; a new send gets a new key.
+   const requestKey=b.submissionId||'compat:'+await digest(JSON.stringify(payload));
+   const messagePayload=r.stage===3?{text:payload.text}:payload;
+   const id=crypto.randomUUID();
+   const statements=[db().prepare(`INSERT INTO answers(id,room,player,stage,payload,submitted_at,hidden)
+    SELECT ?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM rooms WHERE code=? AND stage=? AND phase='open' AND round=?)
+    AND NOT EXISTS(SELECT 1 FROM messages WHERE room=? AND player=? AND stage=? AND request_key=?)
+    ON CONFLICT(room,player,stage) DO UPDATE SET payload=excluded.payload,submitted_at=excluded.submitted_at,hidden=excluded.hidden`).bind(crypto.randomUUID(),r.code,who.id,r.stage,JSON.stringify(payload),now,pending,r.code,r.stage,r.round,r.code,who.id,r.stage,requestKey)];
+   if(hasMessage)statements.push(db().prepare(`INSERT INTO messages(id,room,player,stage,payload,submitted_at,hidden,request_key)
+    SELECT ?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM rooms WHERE code=? AND stage=? AND phase='open' AND round=?)
+    ON CONFLICT(room,player,stage,request_key) DO NOTHING`).bind(id,r.code,who.id,r.stage,JSON.stringify(messagePayload),now,pending,requestKey,r.code,r.stage,r.round));
+   const result=await db().batch(statements);
+   if(!result.some(x=>x.meta.changes)){
+    const previous=await db().prepare('SELECT hidden,payload FROM messages WHERE room=? AND player=? AND stage=? AND request_key=?').bind(r.code,who.id,r.stage,requestKey).first<{hidden:number;payload:string}>();
+    if(!previous)throw new Error('本轮已停止收集');
+    if(previous.payload!==JSON.stringify(messagePayload))throw new Error('这条发送已保存，请刷新后发送新内容');
+    return json({saved:true,duplicate:true,pending:previous.hidden===2,state:await state(req,r.code)});
+   }
+   return json({saved:true,pending:!!pending,state:await state(req,r.code)});
+  }
   const result=await db().prepare(`INSERT INTO answers(id,room,player,stage,payload,submitted_at,hidden)
    SELECT ?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM rooms WHERE code=? AND stage=? AND phase='open' AND round=?)
    ON CONFLICT(room,player,stage) DO UPDATE SET payload=excluded.payload,submitted_at=excluded.submitted_at,hidden=CASE WHEN answers.hidden=1 THEN 1 ELSE excluded.hidden END`).bind(crypto.randomUUID(),r.code,who.id,r.stage,JSON.stringify(payload),now,pending,r.code,r.stage,r.round).run();
   if(!result.meta.changes)throw new Error('本轮已停止收集');return json({saved:true,pending:!!pending,state:await state(req,r.code)});
  }
  if(who.role!=='host')return json({error:'仅主持人可以操作'},403);
- if(b.action==='export'){const rows=await db().prepare('SELECT player,stage,payload,hidden,submitted_at FROM answers WHERE room=? ORDER BY stage,submitted_at').bind(r.code).all();return json({room:r.code,rulesVersion:r.rules_version,revealedMask:r.revealed_mask,demo:!!r.is_demo,round:r.round,exportedAt:new Date().toISOString(),expiresAt:r.expires_at,answers:rows.results});}
- if(b.action==='hide'){await db().prepare('UPDATE answers SET hidden=? WHERE room=? AND id=?').bind(b.hidden?1:0,r.code,String(b.id)).run();return json(await state(req,r.code));}
+ if(b.action==='export'){const rows=await db().prepare('SELECT player,stage,payload,hidden,submitted_at FROM answers WHERE room=? ORDER BY stage,submitted_at').bind(r.code).all();const messages=await db().prepare('SELECT id,player,stage,payload,hidden,submitted_at FROM messages WHERE room=? ORDER BY stage,submitted_at,id').bind(r.code).all();return json({room:r.code,rulesVersion:r.rules_version,revealedMask:r.revealed_mask,demo:!!r.is_demo,round:r.round,exportedAt:new Date().toISOString(),expiresAt:r.expires_at,answers:rows.results,messages:messages.results});}
+ if(b.action==='hide'){await db().batch(['answers','messages'].map(table=>db().prepare(`UPDATE ${table} SET hidden=? WHERE room=? AND id=?`).bind(b.hidden?1:0,r.code,String(b.id))));return json(await state(req,r.code));}
  if(b.action==='seed'){
   if(!r.is_demo)return json({error:'正式房间不能添加演示数据'},403);
   if(r.phase!=='open'||r.stage<1||r.stage>6)throw new Error('请先开始本关收集');
   for(let i=0;i<6;i++){const id=`demo-${r.code}-${i}`;await db().prepare('INSERT OR IGNORE INTO players(id,room,token_hash,created_at) VALUES(?,?,?,?)').bind(id,r.code,await digest(token()),now).run();const payload=validatePayload(r.stage,demoPayload(r.stage,i,r.rules_version),r.rules_version);await db().prepare(`INSERT INTO answers(id,room,player,stage,payload,submitted_at,hidden) SELECT ?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM rooms WHERE code=? AND stage=? AND phase='open' AND round=?) ON CONFLICT(room,player,stage) DO NOTHING`).bind(crypto.randomUUID(),r.code,id,r.stage,JSON.stringify(payload),now+i,r.rules_version>=4&&r.stage===5?2:0,r.code,r.stage,r.round).run();}
+  if([1,2,3].includes(r.stage))await db().prepare(`INSERT INTO messages(id,room,player,stage,payload,submitted_at,hidden,request_key)
+   SELECT a.id,a.room,a.player,a.stage,CASE WHEN a.stage=3 THEN json_object('text',json_extract(a.payload,'$.text')) ELSE a.payload END,a.submitted_at,a.hidden,'demo'
+   FROM answers a WHERE a.room=? AND a.stage=? AND a.player LIKE ?
+   AND EXISTS(SELECT 1 FROM rooms WHERE code=? AND stage=? AND phase='open' AND round=?)
+   ON CONFLICT(room,player,stage,request_key) DO NOTHING`).bind(r.code,r.stage,'demo-'+r.code+'-%',r.code,r.stage,r.round).run();
   return json(await state(req,r.code));
  }
  if(b.action==='control'){
   if(b.revision!==r.revision)return json({error:'状态已更新，请再操作一次'},409);
   if(b.command==='reset'){
-   const result=await db().batch([db().prepare('DELETE FROM answers WHERE room=? AND EXISTS(SELECT 1 FROM rooms WHERE code=? AND revision=?)').bind(r.code,r.code,r.revision),db().prepare(`UPDATE rooms SET stage=0,phase='open',deadline=NULL,remaining=NULL,game_end=NULL,round=round+1,revealed_mask=0,fallback_mask=0,revision=revision+1 WHERE code=? AND revision=?`).bind(r.code,r.revision)]);
-   if(!result[1].meta.changes)return json({error:'状态已更新，请再操作一次'},409);return json(await state(req,r.code));
+   const result=await db().batch([db().prepare('DELETE FROM messages WHERE room=? AND EXISTS(SELECT 1 FROM rooms WHERE code=? AND revision=?)').bind(r.code,r.code,r.revision),db().prepare('DELETE FROM answers WHERE room=? AND EXISTS(SELECT 1 FROM rooms WHERE code=? AND revision=?)').bind(r.code,r.code,r.revision),db().prepare(`UPDATE rooms SET stage=0,phase='open',deadline=NULL,remaining=NULL,game_end=NULL,round=round+1,revealed_mask=0,fallback_mask=0,revision=revision+1 WHERE code=? AND revision=?`).bind(r.code,r.revision)]);
+   if(!result[2].meta.changes)return json({error:'状态已更新，请再操作一次'},409);return json(await state(req,r.code));
   }
   let stage=r.stage,phase=r.phase,deadline=r.deadline,remaining=r.remaining,revealed=r.revealed_mask,fallback=r.fallback_mask;
   if(b.command==='next'&&stage<7&&(stage===0||phase==='revealed')){stage=r.rules_version>=4&&stage===5?7:stage+1;phase=stage===7?'revealed':'ready';if(stage<7)revealed&=~(1<<stage);deadline=null;remaining=null;}
